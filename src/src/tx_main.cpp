@@ -254,6 +254,28 @@ void RandRSSI(uint8_t *outrnd, size_t len)
 
 #endif
 
+#ifdef RADIO_LR1121
+void RandRSSI(uint8_t *outrnd, size_t len)
+{
+
+  uint8_t rnd;
+
+  Radio.RXnb(LR1121_MODE_RX_CONT);
+
+  for (int i = 0; i < len; i++)
+  {
+    rnd = 0;
+    for (uint8_t bit = 0; bit < 8; bit++)
+    {
+        delay(1);
+        rnd |= ( Radio.GetRssiInst(SX12XX_Radio_1) & 0x01 ) << bit;
+    }
+    outrnd[i] = rnd;
+  }
+}
+
+
+#endif
 
 void GetRandomBytes(uint8_t *outrnd, size_t len)
 {
@@ -278,6 +300,9 @@ uint32_t GetRandom32t()
   uint32_t rnd = 0;
 #ifdef RADIO_SX128X
   Radio.RXnb(SX1280_MODE_RX_CONT);
+#endif
+#ifdef RADIO_LR1121
+  Radio.RXnb(LR1121_MODE_RX_CONT);
 #endif
 #ifdef RADIO_SX127X
   // Radio.ConfigLoraDefaults();
