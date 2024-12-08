@@ -23,12 +23,35 @@
 #include "devPDET.h"
 #include "devBackpack.h"
 
+
 #include "MAVLink.h"
 
 #if defined(PLATFORM_ESP32_S3)
 #include "USB.h"
 #define USBSerial Serial
 #endif
+
+
+#ifdef USE_ENCRYPTION
+#include <encryption.h>
+#include <Crypto.h>
+#include <ChaCha.h>
+#include <string.h>
+#if defined(ESP8266) || defined(ESP32)
+#include <pgmspace.h>
+#else
+#include <avr/pgmspace.h>
+#endif
+ChaCha cipher(12);
+uint8_t encryptionCounter[8];
+encryptionState_e encryptionStateSend = ENCRYPTION_STATE_NONE;
+encryption_params_t nonce_key;
+uint8_t MSPDataPackage[ELRS_MSP_BUFFER];
+#else
+uint8_t MSPDataPackage[5];
+#endif
+
+
 
 //// CONSTANTS ////
 #define MSP_PACKET_SEND_INTERVAL 10LU
@@ -76,8 +99,9 @@ LQCALC<25> LQCalc;
 volatile bool busyTransmitting;
 static volatile bool ModelUpdatePending;
 
-uint8_t MSPDataPackage[5];
+
 #define BindingSpamAmount 25
+
 static uint8_t BindingSendCount;
 bool RxWiFiReadyToSend = false;
 
@@ -187,6 +211,155 @@ void ICACHE_RAM_ATTR LinkStatsFromOta(OTA_LinkStats_s * const ls)
   MspSender.ConfirmCurrentPayload(ls->mspConfirm);
 }
 
+#ifdef USE_ENCRYPTION
+
+// TODO test random functions on both RADIO_SX127X and RADIO_SX128X,
+// then delete unused functions.
+#ifdef RADIO_SX127X
+void RandRSSI(uint8_t *outrnd, size_t len)
+{
+  uint8_t rnd;
+
+  for (int i = 0; i < len; i++)
+  {
+    rnd = 0;
+    for (uint8_t bit = 0; bit < 8; bit++)
+    {
+        Radio.SetMode(SX127x_OPMODE_CAD, SX12XX_Radio_1);
+        rnd |= ( Radio.GetCurrRSSI(SX12XX_Radio_2) & 0x01 ) << bit;
+        delay(1);
+    }
+    outrnd[i] = rnd;
+  }
+
+}
+#endif
+
+#ifdef RADIO_SX128X
+void RandRSSI(uint8_t *outrnd, size_t len)
+{
+
+  uint8_t rnd; 
+
+  Radio.RXnb(SX1280_MODE_RX_CONT);
+
+  for (int i = 0; i < len; i++)
+  { 
+    rnd = 0;
+    for (uint8_t bit = 0; bit < 8; bit++)
+    {
+        delay(1);
+        rnd |= ( Radio.GetRssiInst(SX12XX_Radio_1) & 0x01 ) << bit;
+    }
+    outrnd[i] = rnd;
+  }
+}
+
+
+#endif
+
+
+void GetRandomBytes(uint8_t *outrnd, size_t len)
+{
+#ifdef RADIO_SX127X
+  // Radio.ConfigLoraDefaults();
+  Radio.SetRxTimeoutUs(0); // Sets continuous receive mode
+  Radio.RXnb();
+  for (int i = 0; i < len; i++)
+  {
+    for( uint8_t bit = 0; bit < 8; bit++ )
+    {
+      // REG_LR_RSSIWIDEBAND and SX1272Read not defined at this scope
+      // outrnd |= ( ( uint32_t )SX1272Read( REG_LR_RSSIWIDEBAND ) & 0x01 ) << bit;
+      delay(1);
+    }
+  }
+#endif
+}
+
+uint32_t GetRandom32t()
+{
+  uint32_t rnd = 0;
+#ifdef RADIO_SX128X
+  Radio.RXnb(SX1280_MODE_RX_CONT);
+#endif
+#ifdef RADIO_SX127X
+  // Radio.ConfigLoraDefaults();
+  Radio.SetRxTimeoutUs(0); // Sets continuous receive mode
+  Radio.RXnb();
+#endif
+
+  for( int i = 0; i < 32; i++ )
+  {
+    delay(1);
+    // REG_LR_RSSIWIDEBAND and SX1272Read not defined at this scope
+    // Unfiltered RSSI value reading. Only takes the least sitgnificant bit
+    // rnd |= ( ( uint32_t )SX1272Read( REG_LR_RSSIWIDEBAND ) & 0x01 ) << i;
+  }
+  return rnd;
+}
+
+
+bool InitCrypto()
+{
+
+  encryption_params_t *enc_params;
+  uint8_t rounds = 12;
+  size_t counterSize = 8;
+  size_t keySize = 16;
+
+  uint8_t counter[] = {109, 110, 111, 112, 113, 114, 115, 116};
+
+  memcpy(encryptionCounter, counter, counterSize);
+  cipher.clear();
+
+  unsigned char *master_key = (unsigned char *) calloc( keySize + 1, sizeof(char) );
+  hexStr2Arr( master_key, stringify_expanded(USE_ENCRYPTION), keySize );
+
+  cipher.setNumRounds(rounds);
+  if ( !cipher.setKey(master_key, keySize) )
+  {
+      return false;
+  }
+  if ( !cipher.setIV(nonce_key.nonce, cipher.ivSize()) )
+  {
+      return false;
+  }
+  if (!cipher.setCounter(counter, counterSize))
+  {
+      return false;
+  }
+  
+  // Encrypt the session key and send it
+  MSPDataPackage[0] = MSP_ELRS_INIT_ENCRYPT;
+  enc_params = (encryption_params_t *) &MSPDataPackage[1];
+  memcpy( enc_params->nonce, nonce_key.nonce, cipher.ivSize() );
+  memcpy( enc_params->key, nonce_key.key, keySize ); 
+
+  cipher.encrypt(enc_params->key, enc_params->key, keySize);
+  free(master_key);
+
+  MspSender.SetDataToTransmit(MSPDataPackage, sizeof(encryption_params_t) + 1);
+
+  // Further packets are encrypted with the session key
+  if ( !cipher.setKey(nonce_key.key, keySize) )
+  {
+      return false;
+  }
+  if ( !cipher.setIV(nonce_key.nonce, cipher.ivSize()) )
+  {
+      return false;
+  }
+  if (!cipher.setCounter(counter, counterSize))
+  {
+      return false;
+  }
+
+  return true;
+}
+#endif
+
+
 bool ICACHE_RAM_ATTR ProcessTLMpacket(SX12xxDriverCommon::rx_status const status)
 {
   if (status != SX12xxDriverCommon::SX12XX_RX_OK)
@@ -194,6 +367,13 @@ bool ICACHE_RAM_ATTR ProcessTLMpacket(SX12xxDriverCommon::rx_status const status
     DBGLN("TLM HW CRC error");
     return false;
   }
+
+#ifdef USE_ENCRYPTION
+  if (encryptionStateSend == ENCRYPTION_STATE_FULL)
+  {
+    DecryptMsg( Radio.RXdataBuffer );
+  }
+#endif
 
   OTA_Packet_s * const otaPktPtr = (OTA_Packet_s * const)Radio.RXdataBuffer;
   if (!OtaValidatePacketCrc(otaPktPtr))
@@ -238,6 +418,7 @@ bool ICACHE_RAM_ATTR ProcessTLMpacket(SX12xxDriverCommon::rx_status const status
       telemPtr = ota8->tlm_dl.payload;
       dataLen = sizeof(ota8->tlm_dl.payload);
     }
+
     //DBGLN("pi=%u len=%u", ota8->tlm_dl.packageIndex, dataLen);
     TelemetryReceiver.ReceiveData(ota8->tlm_dl.packageIndex & ELRS8_TELEMETRY_MAX_PACKAGES, telemPtr, dataLen);
   }
@@ -628,9 +809,16 @@ void ICACHE_RAM_ATTR SendRCdataToRF()
   }
   else
 #endif
+
   {
+#ifdef USE_ENCRYPTION
+    if (encryptionStateSend == ENCRYPTION_STATE_FULL)
+    {
+      EncryptMsg( (uint8_t*)&otaPkt, (uint8_t*)&otaPkt );
+    }
+#endif
+
     Radio.TXnb((uint8_t*)&otaPkt, ExpressLRS_currAirRate_Modparams->PayloadLength, transmittingRadio);
-  }
 }
 
 void ICACHE_RAM_ATTR nonceAdvance()
@@ -1442,6 +1630,10 @@ void setup()
       // Set the pkt rate, TLM ratio, and power from the stored eeprom values
       ChangeRadioParams();
 
+#ifdef USE_ENCRYPTION
+      // Should be a good time to do this, because BeginClearChannelAssessment also sets the radio to continuous recv
+      RandRSSI( (uint8_t *) &nonce_key, 24);
+#endif
   #if defined(Regulatory_Domain_EU_CE_2400)
       SetClearChannelAssessmentTime();
   #endif
@@ -1556,8 +1748,25 @@ void loop()
       TelemetryReceiver.Unlock();
   }
 
-  // only send msp data when binding is not active
   static bool mspTransferActive = false;
+
+#ifdef USE_ENCRYPTION
+  if ( (connectionState == connected) && (!MspSender.IsActive()) )
+  { 
+    if (encryptionStateSend == ENCRYPTION_STATE_NONE)
+	{
+      InitCrypto();
+      encryptionStateSend = ENCRYPTION_STATE_PROPOSED;
+    }
+	  else if (encryptionStateSend == ENCRYPTION_STATE_PROPOSED )
+	  {
+        // MspSender.IsActive() will be true until our proposal msg is ack'ed
+        encryptionStateSend = ENCRYPTION_STATE_FULL;
+	  }
+  }
+#endif
+
+  // only send msp data when binding is not active
   if (InBindingMode)
   {
 #if defined(RADIO_LR1121)
