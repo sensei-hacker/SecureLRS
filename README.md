@@ -52,4 +52,3 @@ To configure your ExpressLRS / PrivacyLRS hardware, the ExpressLRS Configurator 
 
 https://github.com/ExpressLRS/ExpressLRS-Configurator/releases/
 
-

@@ -234,6 +234,7 @@ void RandRSSI(uint8_t *outrnd, size_t len)
 void RandRSSI(uint8_t *outrnd, size_t len)
 {
 
+
   uint8_t rnd;
 
   Radio.RXnb(SX1280_MODE_RX_CONT);
@@ -252,6 +253,7 @@ void RandRSSI(uint8_t *outrnd, size_t len)
 
 
 #endif
+
 
 #ifdef RADIO_LR1121
 void RandRSSI(uint8_t *outrnd, size_t len)
@@ -294,6 +296,7 @@ void GetRandomBytes(uint8_t *outrnd, size_t len)
 #endif
 }
 
+// TODO verify which rand bytes methods works for RADIO_LR1121
 uint32_t GetRandom32t()
 {
   uint32_t rnd = 0;
@@ -303,6 +306,7 @@ uint32_t GetRandom32t()
 #ifdef RADIO_LR1121
   Radio.RXnb(LR1121_MODE_RX_CONT);
 #endif
+
 #ifdef RADIO_SX127X
   // Radio.ConfigLoraDefaults();
   Radio.SetRxTimeoutUs(0); // Sets continuous receive mode
@@ -350,11 +354,13 @@ bool InitCrypto()
       return false;
   }
 
+
   // Encrypt the session key and send it
   MSPDataPackage[0] = MSP_ELRS_INIT_ENCRYPT;
   enc_params = (encryption_params_t *) &MSPDataPackage[1];
   memcpy( enc_params->nonce, nonce_key.nonce, cipher.ivSize() );
   memcpy( enc_params->key, nonce_key.key, keySize );
+
 
   cipher.encrypt(enc_params->key, enc_params->key, keySize);
   free(master_key);
@@ -556,7 +562,6 @@ void SetRFLinkRate(uint8_t index) // Set speed of RF link
 
   if ((ModParams == ExpressLRS_currAirRate_Modparams)
     && (RFperf == ExpressLRS_currAirRate_RFperfParams)
-    && (invertIQ == Radio.IQinverted)
     && (OtaSwitchModeCurrent == newSwitchMode))
     return;
 
@@ -748,7 +753,11 @@ void ICACHE_RAM_ATTR SendRCdataToRF()
   }
   else
   {
-    if ((NextPacketIsMspData && MspSender.IsActive()) || dontSendChannelData)
+    if (firmwareOptions.is_airport)
+    {
+      OtaPackAirportData(&otaPkt, &apInputBuffer);
+    }
+    else if ((NextPacketIsMspData && MspSender.IsActive()) || dontSendChannelData)
     {
       otaPkt.std.type = PACKET_TYPE_MSPDATA;
       if (OtaIsFullRes)
@@ -825,15 +834,14 @@ void ICACHE_RAM_ATTR SendRCdataToRF()
   }
   else
 #endif
-
+  {
 #ifdef USE_ENCRYPTION
-  if (encryptionStateSend == ENCRYPTION_STATE_FULL)
-  {
-    EncryptMsg( (uint8_t*)&otaPkt, (uint8_t*)&otaPkt );
-  }
-#endif
+    if (encryptionStateSend == ENCRYPTION_STATE_FULL)
+    {
+      EncryptMsg( (uint8_t*)&otaPkt, (uint8_t*)&otaPkt );
+    }
+  #endif
 
-  {
     Radio.TXnb((uint8_t*)&otaPkt, ExpressLRS_currAirRate_Modparams->PayloadLength, transmittingRadio);
   }
 }
@@ -1234,6 +1242,8 @@ static void ExitBindingMode()
   OtaUpdateCrcInitFromUid();
   InBindingMode = false; // Clear binding mode before SetRFLinkRate() for correct IQ
 
+  UARTconnected();
+  
   SetRFLinkRate(config.GetRate()); //return to original rate
 
   DBGLN("Exiting binding mode");
@@ -1768,6 +1778,7 @@ void loop()
 #ifdef USE_ENCRYPTION
   if ( (connectionState == connected) && (!MspSender.IsActive()) )
   {
+
     if (encryptionStateSend == ENCRYPTION_STATE_NONE)
 	{
       InitCrypto();
