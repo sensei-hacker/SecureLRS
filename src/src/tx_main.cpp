@@ -234,12 +234,12 @@ void RandRSSI(uint8_t *outrnd, size_t len)
 void RandRSSI(uint8_t *outrnd, size_t len)
 {
 
-  uint8_t rnd; 
+  uint8_t rnd;
 
   Radio.RXnb(SX1280_MODE_RX_CONT);
 
   for (int i = 0; i < len; i++)
-  { 
+  {
     rnd = 0;
     for (uint8_t bit = 0; bit < 8; bit++)
     {
@@ -253,6 +253,28 @@ void RandRSSI(uint8_t *outrnd, size_t len)
 
 #endif
 
+#ifdef RADIO_LR1121
+void RandRSSI(uint8_t *outrnd, size_t len)
+{
+
+  uint8_t rnd;
+
+  Radio.RXnb(LR1121_MODE_RX_CONT);
+
+  for (int i = 0; i < len; i++)
+  {
+    rnd = 0;
+    for (uint8_t bit = 0; bit < 8; bit++)
+    {
+        delay(1);
+        rnd |= ( Radio.GetRssiInst(SX12XX_Radio_1) & 0x01 ) << bit;
+    }
+    outrnd[i] = rnd;
+  }
+}
+
+
+#endif
 
 void GetRandomBytes(uint8_t *outrnd, size_t len)
 {
@@ -277,6 +299,9 @@ uint32_t GetRandom32t()
   uint32_t rnd = 0;
 #ifdef RADIO_SX128X
   Radio.RXnb(SX1280_MODE_RX_CONT);
+#endif
+#ifdef RADIO_LR1121
+  Radio.RXnb(LR1121_MODE_RX_CONT);
 #endif
 #ifdef RADIO_SX127X
   // Radio.ConfigLoraDefaults();
@@ -324,12 +349,12 @@ bool InitCrypto()
   {
       return false;
   }
-  
+
   // Encrypt the session key and send it
   MSPDataPackage[0] = MSP_ELRS_INIT_ENCRYPT;
   enc_params = (encryption_params_t *) &MSPDataPackage[1];
   memcpy( enc_params->nonce, nonce_key.nonce, cipher.ivSize() );
-  memcpy( enc_params->key, nonce_key.key, keySize ); 
+  memcpy( enc_params->key, nonce_key.key, keySize );
 
   cipher.encrypt(enc_params->key, enc_params->key, keySize);
   free(master_key);
@@ -1746,7 +1771,7 @@ void loop()
 
 #ifdef USE_ENCRYPTION
   if ( (connectionState == connected) && (!MspSender.IsActive()) )
-  { 
+  {
     if (encryptionStateSend == ENCRYPTION_STATE_NONE)
 	{
       InitCrypto();
