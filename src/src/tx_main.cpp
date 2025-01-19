@@ -217,12 +217,12 @@ void RandRSSI(uint8_t *outrnd, size_t len)
 
   for (int i = 0; i < len; i++)
   {
+    Radio.SetMode(SX127x_OPMODE_CAD, SX12XX_Radio_1);
     rnd = 0;
     for (uint8_t bit = 0; bit < 8; bit++)
     {
-        Radio.SetMode(SX127x_OPMODE_CAD, SX12XX_Radio_1);
-        rnd |= ( Radio.GetCurrRSSI(SX12XX_Radio_2) & 0x01 ) << bit;
         delay(1);
+        rnd |= ( Radio.GetCurrRSSI(SX12XX_Radio_1) & 0x01 ) << bit;
     }
     outrnd[i] = rnd;
   }
@@ -294,6 +294,8 @@ void GetRandomBytes(uint8_t *outrnd, size_t len)
 #endif
 }
 
+/*
+Not used because it may return 0 on some hardware - kept for future reference if needed.
 uint32_t GetRandom32t()
 {
   uint32_t rnd = 0;
@@ -318,6 +320,7 @@ uint32_t GetRandom32t()
   }
   return rnd;
 }
+*/
 
 
 bool InitCrypto()
